@@ -1,9 +1,11 @@
 import base64
 import datetime
-import json
-import sys
+import re
+import threading
 
+import pyttsx3
 import requests
+import spacy
 import speech_recognition
 import speech_recognition as sr
 import torch
@@ -11,99 +13,56 @@ from pydub import AudioSegment
 from pydub.playback import play
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
 
+import utils
+
 print("Starting...")
+AudioSegment.converter = "ffmpeg.exe"
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
 print("Loading Large Zero-Shot Classification Model...")
 context_model_name = "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli"
-context_tokenizer = AutoTokenizer.from_pretrained(context_model_name)
+context_tokenizer = AutoTokenizer.from_pretrained(context_model_name, use_fast=True)
 context_model = AutoModelForSequenceClassification.from_pretrained(context_model_name)
+
+print("Loading Large Natural Language Processing Model.")
+nlp = spacy.load("en_core_web_lg")
+
+
 def speak(message: str):
-    url = "https://api.convai.com/tts/"
-
-    payload = json.dumps({
-        "transcript": message,
-        "voice": "WUMale 5",
-        "encoding": "mp3"
-    })
-    headers = {
-        'CONVAI-API-KEY': 'c59f0a48ab93abab68aa38cb3f0b97f5',
-        'Content-Type': 'application/json'
-    }
-
-    response = requests.request("POST", url, headers=headers, data=payload)
-
-    with open('audioResponse.wav', 'wb') as f:
-        f.write(response.content)
-    audio = AudioSegment.from_file("audioResponse.wav")
-    play(audio)
+    engine = pyttsx3.init()
+    voices = engine.getProperty('voices')
+    engine.setProperty('voice', voices[0].id)
+    engine.setProperty('rate', 190)
+    engine.say(message)
+    engine.runAndWait()
 
 
 def checkJarvisContext(message):
+    if not ("jarvis" in message.lower()):
+        return False
     classifier = pipeline("zero-shot-classification", model=context_model, tokenizer=context_tokenizer)
-    candidate_labels = ["Talking To Jarvis", "Talking Of Jarvis", "Talking To Other"]
+    candidate_labels = ["Talking To Jarvis", "Talking About Jarvis", "Talking To Someone Else"]
     result = classifier(message, candidate_labels)
-    return result['labels'][0] == "Talking To Jarvis"
 
+    target_label = "Talking To Jarvis"
+    threshold = 0.055
 
-def checkIntent(message):
-    classifier = pipeline("zero-shot-classification", model=context_model, tokenizer=context_tokenizer)
-    candidate_labels = ["operation", "message"]
-    result = classifier(message, candidate_labels)
-    return "ACTION" if result['scores'][result['labels'].index('operation')] > result['scores'][
-        result['labels'].index('message')] else "MESSAGE"
+    target_score = None
+    result_label = None
 
-def checkRequest(message):
-    classifier = pipeline("zero-shot-classification", model=context_model, tokenizer=context_tokenizer)
-    candidate_labels = [
-        "Set a timer",
-        "Play music",
-        "Turn on lights",
-        "Turn off lights",
-        "Check the weather",
-        "Send a message",
-        "Call a contact",
-        "Read the news",
-        "Set a reminder",
-        "Find a restaurant",
-        "Tell a joke",
-        "Translate a phrase",
-        "Search the web",
-        "Open an app",
-        "Answer a question",
-        "Schedule an event",
-        "Get directions",
-        "Set an alarm",
-        "Calculate a math problem",
-        "Provide recommendations",
-        "Tell a story",
-        "Control smart home devices",
-        "Create a shopping list",
-        "Check your calendar",
-        "Play a game",
-        "Help with cooking",
-        "Give sports scores",
-        "Provide health information",
-        "Recommend movies or TV shows",
-        "Book an appointment",
-        "Set a reminder",
-        "Order food",
-        "Check flight status",
-        "Control the thermostat",
-        "Provide driving directions",
-        "Find nearby places",
-        "Give stock market updates",
-        "Manage your tasks",
-        "Provide trivia",
-        "Translate languages",
-        "Provide historical information",
-        "Perform unit conversions",
-        "Manage your to-do list",
-        "Answer general knowledge questions",
-    ]
-    result = classifier(message, candidate_labels)
-    return result['labels'][0]
+    for label, score in zip(result['labels'], result['scores']):
+        if label == target_label:
+            target_score = score
 
+    for label, score in zip(result['labels'], result['scores']):
+        if label != target_label and score >= target_score + threshold:
+            result_label = label
+            break
+
+    if result_label is None:
+        result_label = target_label
+
+    return result_label == "Talking To Jarvis"
 
 
 def makeRequest(message):
@@ -123,8 +82,23 @@ def makeRequest(message):
 
     decode_string = base64.b64decode(data["audio"])
 
-    with open('audioResponse.wav', 'wb') as f:
+    with open('Audios/response.wav', 'wb') as f:
         f.write(decode_string)
+    return data['text']
+
+
+ding_audio = AudioSegment.from_file("Audios/ding.wav")
+
+
+def play_ding():
+    play(ding_audio)
+
+
+response_audio = AudioSegment.from_file("Audios/response.wav")
+
+
+def play_response():
+    play(response_audio)
 
 
 def start():
@@ -137,49 +111,73 @@ def start():
         if response == "NO_JARVIS_PREFIX":
             checkContext = True
             continue
+        print(f'User: {response}')
         print("Generating response...")
         checkContext = False
+        audio_thread = threading.Thread(target=play_ding)
+        audio_thread.start()
 
-        current_time = datetime.datetime.now()
-        formatted_time = current_time.strftime("%I:%M %p")
+        handleQuery(response)
 
-        intent = checkIntent(response)
-        if intent == "MESSAGE":
-            makeRequest(response)
-            audio = AudioSegment.from_file("audioResponse.wav")
-            play(audio)
-        elif intent == "ACTION":
-            if ("shutdown" in response):
-                speak("Goodbye, Sir.")
-                sys.exit()
+        # utils.search(response.lower().replace("jarvis", "").replace("open", ""))
 
 
-def takeCommand(checkContext: bool):
+def takeCommand(checkContext: bool, timeout=0, phrase_time_limit=15):
     r = sr.Recognizer()
     with sr.Microphone() as source:
-        print("Listening...")
+        r.adjust_for_ambient_noise(source, 0)
+        r.pause_threshold = 0.001
+        r.non_speaking_duration = 0.0001
+        print("Listening to Audio...")
         r.pause_threshold = 1
         try:
-            audio = r.listen(source, timeout=5, phrase_time_limit=9)
+            audio = r.listen(source, timeout, phrase_time_limit)
         except speech_recognition.WaitTimeoutError:
             print("Restarting with context required...")
             return "UNKNOWN_RESPONSE"
         try:
-            print("Recognizing...")
+            print("Transcribing audio...")
             query: str = r.recognize_google(audio, language="en")
+            # query: str = r.recognize_whisper(audio, translate=True, model="tiny")
             if checkContext:
                 if not (checkJarvisContext(query)):
                     print("Condition Unmet: Query is not to J.A.R.V.I.S")
                     return "NO_JARVIS_PREFIX"
-            print(f'User: {query}')
         except Exception:
             print("Unknown Response")
             return "UNKNOWN_RESPONSE"
         return query
 
-while True:
-    i = input("> ")
-    print(checkRequest(i))
 
-if __name__ == "_a_main__":
+def handleQuery(query):
+    intent, description = utils.get_intent(nlp, query)
+
+    if intent is not None:
+        entities = utils.get_entities(nlp, re.sub(r'jarvis', '', query, flags=re.IGNORECASE))
+        entity_data = [(entity, label) for entity, label in entities] if entities else None
+        if entity_data:
+            entity_string = ", ".join([f"Label: {e[1]} Entity: {e[0]}" for e in entity_data])
+        else:
+            entity_string = None
+        print(f"Intent: {intent}")
+        print(f"Thought: {description}")
+        print(f"Entities: {entity_string}")
+        if intent == "time":
+            first_gpe = next((entity for entity, label in entity_data if label == "GPE"), None)
+            if first_gpe:
+                current_time = datetime.datetime.now()
+                formatted_time = current_time.strftime("%I:%M %p")
+                speak(f"Sir, the time in {first_gpe} is {formatted_time}")
+            else:
+                current_time = datetime.datetime.now()
+                formatted_time = current_time.strftime("%I:%M %p")
+                speak(f"Sir, the time is {formatted_time}")
+    else:
+        text = makeRequest(query)
+        audio = AudioSegment.from_file("Audios/response.wav")
+        print(f"Response: {text}")
+        play(audio)
+
+
+if __name__ == "__main__":
     start()

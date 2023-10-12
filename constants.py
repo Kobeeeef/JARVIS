@@ -34,7 +34,7 @@ intents = {
     },
     "reminder": {
         "descriptions": [
-            "Remind me to do something at this time"
+            "Remind me to do something at this time",
             "Set a reminder for a specific task",
             "Remind me of something",
             "Remember this for me",

@@ -44,3 +44,5 @@ def get_entities(nlp_entities, statement):
     doc_entities = nlp_entities(statement)
     entities = [(ent.text, ent.label_) for ent in doc_entities.ents]
     return entities if entities else None
+
+

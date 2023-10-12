@@ -14,6 +14,7 @@ from pydub.playback import play
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
 
 import utils
+from test import getResponse
 
 print("Starting...")
 AudioSegment.converter = "ffmpeg.exe"
@@ -125,9 +126,7 @@ def start():
 def takeCommand(checkContext: bool, timeout=0, phrase_time_limit=15):
     r = sr.Recognizer()
     with sr.Microphone() as source:
-        r.adjust_for_ambient_noise(source, 0)
-        r.pause_threshold = 0.001
-        r.non_speaking_duration = 0.0001
+        r.adjust_for_ambient_noise(source, 0.2)
         print("Listening to Audio...")
         r.pause_threshold = 1
         try:
@@ -160,7 +159,7 @@ def handleQuery(query):
         else:
             entity_string = None
         print(f"Intent: {intent}")
-        print(f"Thought: {description}")
+        print(f"Thought: {description[0]}")
         print(f"Entities: {entity_string}")
         if intent == "time":
             first_gpe = next((entity for entity, label in entity_data if label == "GPE"), None)

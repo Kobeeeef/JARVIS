@@ -3,6 +3,20 @@ import time
 import pyautogui
 
 from constants import intents
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+def get_current_time(state="America/Los_Angeles"):
+    try:
+        if state is None:
+            state = "America/Los_Angeles"
+        timezone = ZoneInfo(state)
+        current_time = datetime.now(timezone)
+        formatted_time = current_time.strftime("%A, %Y-%m-%d %H:%M:%S %Z")
+        return formatted_time
+    except ZoneInfoNotFoundError:
+        return "Timezone not found for the specified location."
+
 
 
 def search(query):

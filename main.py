@@ -70,7 +70,7 @@ def makeRequest(message):
     url = "https://api.convai.com/character/getResponse"
 
     headers = {
-        'CONVAI-API-KEY': 'c59f0a48ab93abab68aa38cb3f0b97f5'
+        'CONVAI-API-KEY': ''
     }
     payload = {
         'userText': message,
